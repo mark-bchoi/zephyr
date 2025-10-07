@@ -4,7 +4,7 @@ include(ExternalProject)
 
 if(CONFIG_HAS_RPI_PICO)
   zephyr_library()
-  set_property(TARGET ${ZEPHYR_CURRENT_LIBRARY} PROPERTY C_STANDARD 11)
+  zephyr_library_compile_options(-std=gnu11)
 
   set(rp2_common_dir ${ZEPHYR_HAL_RPI_PICO_MODULE_DIR}/src/rp2_common)
   set(rp2xxx_dir ${ZEPHYR_HAL_RPI_PICO_MODULE_DIR}/src/${CONFIG_SOC_SERIES})
@@ -154,6 +154,15 @@ if(CONFIG_HAS_RPI_PICO)
           ${common_dir}/hardware_claim/claim.c)
   zephyr_include_directories_ifdef(CONFIG_PICOSDK_USE_CLAIM
           ${common_dir}/hardware_claim/include)
+
+  zephyr_include_directories_ifdef(CONFIG_RISCV
+          ${common_dir}/pico_sync/include
+          ${common_dir}/pico_time/include
+          ${rp2_common_dir}/hardware_hazard3/include
+          ${rp2_common_dir}/hardware_riscv_platform_timer/include
+          ${rp2_common_dir}/hardware_riscv/include)
+  zephyr_library_sources_ifdef(CONFIG_RISCV
+          ${rp2_common_dir}/hardware_irq/irq.c)
 
   zephyr_library_sources_ifdef(CONFIG_SOC_SERIES_RP2350
           ${rp2_common_dir}/pico_runtime_init/runtime_init.c)

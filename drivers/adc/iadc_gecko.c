@@ -127,7 +127,7 @@ static int start_read(const struct device *dev, const struct adc_sequence *seque
 
 	if (sequence->oversampling) {
 		LOG_ERR("Oversampling is not supported");
-		return -ENOTSUP;
+		return -EINVAL;
 	}
 
 	/* Check resolution setting */
@@ -331,7 +331,7 @@ static int adc_gecko_channel_setup(const struct device *dev,
 		break;
 	default:
 		LOG_ERR("unsupported channel gain '%d'", channel_cfg->gain);
-		return -ENOTSUP;
+		return -EINVAL;
 	}
 
 	/* Setup reference */
@@ -353,7 +353,7 @@ static int adc_gecko_channel_setup(const struct device *dev,
 	default:
 		LOG_ERR("unsupported channel reference type '%d'",
 			channel_cfg->reference);
-		return -ENOTSUP;
+		return -EINVAL;
 	}
 
 	channel_config->initialized = true;
@@ -370,7 +370,7 @@ static int adc_gecko_pm_action(const struct device *dev, enum pm_device_action a
 	if (action == PM_DEVICE_ACTION_RESUME) {
 		err = clock_control_on(config->clock_dev,
 				       (clock_control_subsys_t)&config->clock_cfg);
-		if (err < 0) {
+		if (err < 0 && err != -EALREADY) {
 			return err;
 		}
 
@@ -445,7 +445,7 @@ static DEVICE_API(adc, api_gecko_adc_driver_api) = {
 		irq_enable(DT_INST_IRQN(n));	\
 	}; \
 	DEVICE_DT_INST_DEFINE(n,					 \
-			      &adc_gecko_init, PM_DEVICE_DT_INST_GET(n), \
+			      adc_gecko_init, PM_DEVICE_DT_INST_GET(n),  \
 			      &adc_gecko_data_##n, &adc_gecko_config_##n,\
 			      POST_KERNEL, CONFIG_ADC_INIT_PRIORITY,	 \
 			      &api_gecko_adc_driver_api);

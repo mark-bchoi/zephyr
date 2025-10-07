@@ -17,9 +17,11 @@ LOG_MODULE_REGISTER(net_openthread_platform, CONFIG_OPENTHREAD_PLATFORM_LOG_LEVE
 #include <zephyr/init.h>
 #include <zephyr/version.h>
 #include <zephyr/sys/check.h>
-#include <zephyr/net/openthread.h>
 
 #include "platform/platform-zephyr.h"
+
+#include <openthread.h>
+#include <openthread_utils.h>
 
 #include <openthread/child_supervision.h>
 #include <openthread/cli.h>
@@ -31,6 +33,7 @@ LOG_MODULE_REGISTER(net_openthread_platform, CONFIG_OPENTHREAD_PLATFORM_LOG_LEVE
 #include <openthread/platform/diag.h>
 #include <openthread/tasklet.h>
 #include <openthread/thread.h>
+#include <openthread/thread_ftd.h>
 #include <openthread/dataset.h>
 #include <openthread/joiner.h>
 #include <openthread-system.h>
@@ -39,6 +42,10 @@ LOG_MODULE_REGISTER(net_openthread_platform, CONFIG_OPENTHREAD_PLATFORM_LOG_LEVE
 #if defined(CONFIG_OPENTHREAD_NAT64_TRANSLATOR)
 #include <openthread/nat64.h>
 #endif /* CONFIG_OPENTHREAD_NAT64_TRANSLATOR */
+
+#if defined(CONFIG_OPENTHREAD_ZEPHYR_BORDER_ROUTER)
+#include "openthread_border_router.h"
+#endif /* CONFIG_OPENTHREAD_ZEPHYR_BORDER_ROUTER */
 
 #define OT_STACK_SIZE (CONFIG_OPENTHREAD_THREAD_STACK_SIZE)
 
@@ -94,6 +101,12 @@ LOG_MODULE_REGISTER(net_openthread_platform, CONFIG_OPENTHREAD_PLATFORM_LOG_LEVE
 #define OT_POLL_PERIOD CONFIG_OPENTHREAD_POLL_PERIOD
 #else
 #define OT_POLL_PERIOD 0
+#endif
+
+#if defined(CONFIG_OPENTHREAD_ROUTER_SELECTION_JITTER)
+#define OT_ROUTER_SELECTION_JITTER CONFIG_OPENTHREAD_ROUTER_SELECTION_JITTER
+#else
+#define OT_ROUTER_SELECTION_JITTER 0
 #endif
 
 #define ZEPHYR_PACKAGE_NAME "Zephyr"
@@ -157,6 +170,22 @@ static void ot_joiner_start_handler(otError error, void *context)
 	}
 }
 
+static void ot_configure_instance(void)
+{
+#ifndef CONFIG_OPENTHREAD_COPROCESSOR_RCP
+	/* Configure Child Supervision and MLE Child timeouts. */
+	otChildSupervisionSetInterval(openthread_instance,
+				      CONFIG_OPENTHREAD_CHILD_SUPERVISION_INTERVAL);
+	otChildSupervisionSetCheckTimeout(openthread_instance,
+					  CONFIG_OPENTHREAD_CHILD_SUPERVISION_CHECK_TIMEOUT);
+	otThreadSetChildTimeout(openthread_instance, CONFIG_OPENTHREAD_MLE_CHILD_TIMEOUT);
+
+	if (IS_ENABLED(CONFIG_OPENTHREAD_ROUTER_SELECTION_JITTER_OVERRIDE)) {
+		otThreadSetRouterSelectionJitter(openthread_instance, OT_ROUTER_SELECTION_JITTER);
+	}
+#endif
+}
+
 static bool ot_setup_default_configuration(void)
 {
 	otExtendedPanId xpanid = {0};
@@ -181,7 +210,10 @@ static bool ot_setup_default_configuration(void)
 		return false;
 	}
 
-	net_bytes_from_str(xpanid.m8, 8, (char *)OT_XPANID);
+	if (bytes_from_str(xpanid.m8, 8, (char *)OT_XPANID) != 0) {
+		LOG_ERR("Failed to parse extended PAN ID");
+		return false;
+	}
 	error = otThreadSetExtendedPanId(openthread_instance, &xpanid);
 	if (error != OT_ERROR_NONE) {
 		LOG_ERR("Failed to set %s [%d]", "ext PAN ID", error);
@@ -189,7 +221,11 @@ static bool ot_setup_default_configuration(void)
 	}
 
 	if (strlen(OT_NETWORKKEY)) {
-		net_bytes_from_str(networkKey.m8, OT_NETWORK_KEY_SIZE, (char *)OT_NETWORKKEY);
+		if (bytes_from_str(networkKey.m8, OT_NETWORK_KEY_SIZE, (char *)OT_NETWORKKEY) !=
+		    0) {
+			LOG_ERR("Failed to parse network key");
+			return false;
+		}
 		error = otThreadSetNetworkKey(openthread_instance, &networkKey);
 		if (error != OT_ERROR_NONE) {
 			LOG_ERR("Failed to set %s [%d]", "network key", error);
@@ -286,6 +322,14 @@ int openthread_init(void)
 		return 0;
 	}
 
+	/* Initialize the OpenThread work queue */
+	k_work_queue_init(&openthread_work_q);
+
+	/* Start work queue for the OpenThread module */
+	k_work_queue_start(&openthread_work_q, ot_stack_area,
+			   K_KERNEL_STACK_SIZEOF(ot_stack_area),
+			   OT_PRIORITY, &q_cfg);
+
 	openthread_mutex_lock();
 
 	otSysInit(0, NULL);
@@ -331,11 +375,8 @@ int openthread_init(void)
 		}
 	}
 
+	ot_configure_instance();
 	openthread_mutex_unlock();
-
-	/* Start work queue for the OpenThread module */
-	k_work_queue_start(&openthread_work_q, ot_stack_area, K_KERNEL_STACK_SIZEOF(ot_stack_area),
-			   OT_PRIORITY, &q_cfg);
 
 	(void)k_work_submit_to_queue(&openthread_work_q, &openthread_work);
 
@@ -381,13 +422,6 @@ int openthread_run(void)
 			goto exit;
 		}
 	}
-
-	/* Configure Child Supervision and MLE Child timeouts. */
-	otChildSupervisionSetInterval(openthread_instance,
-				      CONFIG_OPENTHREAD_CHILD_SUPERVISION_INTERVAL);
-	otChildSupervisionSetCheckTimeout(openthread_instance,
-					  CONFIG_OPENTHREAD_CHILD_SUPERVISION_CHECK_TIMEOUT);
-	otThreadSetChildTimeout(openthread_instance, CONFIG_OPENTHREAD_MLE_CHILD_TIMEOUT);
 
 	if (otDatasetIsCommissioned(openthread_instance)) {
 		/* OpenThread already has dataset stored - skip the
@@ -483,6 +517,30 @@ void openthread_mutex_unlock(void)
 	(void)k_mutex_unlock(&openthread_lock);
 }
 
+#if defined(CONFIG_OPENTHREAD_ZEPHYR_BORDER_ROUTER)
+void openthread_notify_border_router_work(void)
+{
+	int error = k_work_submit_to_queue(&openthread_work_q, &openthread_border_router_work);
+
+	if (error < 0) {
+		LOG_ERR("Failed to submit work to queue, error: %d", error);
+	}
+}
+#endif /* CONFIG_OPENTHREAD_ZEPHYR_BORDER_ROUTER */
+
 #ifdef CONFIG_OPENTHREAD_SYS_INIT
-SYS_INIT(openthread_init, POST_KERNEL, CONFIG_OPENTHREAD_SYS_INIT_PRIORITY);
+static int openthread_sys_init(void)
+{
+	int error = openthread_init();
+
+	if (error == 0) {
+#ifndef CONFIG_OPENTHREAD_MANUAL_START
+		error = openthread_run();
+#endif
+	}
+
+	return error;
+}
+
+SYS_INIT(openthread_sys_init, POST_KERNEL, CONFIG_OPENTHREAD_SYS_INIT_PRIORITY);
 #endif /* CONFIG_OPENTHREAD_SYS_INIT */

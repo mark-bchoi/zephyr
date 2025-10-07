@@ -152,6 +152,19 @@ Supported Features
 
 .. zephyr:board-supported-hw::
 
+Bluetooth and IEEE 802.15.4 support
+-----------------------------------
+
+BLE and IEEE 802.15.4 support are enabled on nucleo_wba65ri. To build a zephyr sample using this board
+you first need to install Bluetooth and/or IEEE 802.15.4 Controller libraries available in Zephyr as
+binary blobs.
+
+To fetch Binary Blobs:
+
+.. code-block:: console
+
+   west blobs fetch hal_stm32
+
 Connections and IOs
 ===================
 
@@ -168,10 +181,10 @@ Default Zephyr Peripheral Mapping:
 - I2C_1_SDA : PB1
 - USER_PB : PC13
 - LD1 : PD8
-- SPI_1_NSS : PA12 (arduino_spi)
-- SPI_1_SCK : PB4 (arduino_spi)
-- SPI_1_MISO : PB3 (arduino_spi)
-- SPI_1_MOSI : PA15 (arduino_spi)
+- SPI_2_NSS : PB9 (arduino_spi)
+- SPI_2_SCK : PB10 (arduino_spi)
+- SPI_2_MISO : PA9 (arduino_spi)
+- SPI_2_MOSI : PC3 (arduino_spi)
 
 System Clock
 ------------
